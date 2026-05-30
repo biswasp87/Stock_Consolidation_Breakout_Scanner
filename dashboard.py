@@ -169,6 +169,29 @@ app.layout = html.Div([
     ], style={'margin': '20px'}),
 
     html.Div([
+        # Left Side: Graph in a Card
+        html.Div([
+            html.Div([
+                html.Div([
+                    html.Label("Display Days: ", style={'fontWeight': 'bold'}),
+                    dcc.Slider(id='days-slider', min=30, max=250, step=10, value=90,
+                               marks={i: str(i) for i in range(30, 251, 40)}),
+                ], style={'marginBottom': '20px'}),
+
+                html.Button("Close Graph", id="close-graph", n_clicks=0,
+                            style={'marginBottom': '10px', 'backgroundColor': '#f0f0f0', 'border': '1px solid #ccc', 'padding': '5px 10px', 'cursor': 'pointer'}),
+
+                dcc.Graph(id='stock-graph')
+            ], style={
+                'border': '1px solid #ddd',
+                'borderRadius': '5px',
+                'padding': '15px',
+                'boxShadow': '0 4px 8px 0 rgba(0,0,0,0.2)',
+                'backgroundColor': 'white'
+            })
+        ], id='graph-container', style={'width': '0%', 'display': 'none', 'paddingRight': '10px'}),
+
+        # Right Side: Table
         html.Div([
             dash_table.DataTable(
                 id='stock-table',
@@ -187,23 +210,12 @@ app.layout = html.Div([
                             'column_id': f'{int(t*100) if (t*100)==int(t*100) else t*100}% Status'},
                      'backgroundColor': '#f8d7da', 'color': '#721c24'} for t in [0.025, 0.05, 0.1, 0.15, 0.2]
                 ],
-                style_cell={'textAlign': 'left', 'padding': '5px', 'fontSize': '12px'},
+                style_cell={'textAlign': 'left', 'padding': '5px', 'fontSize': '11px'},
                 style_header={'backgroundColor': 'rgb(230, 230, 230)', 'fontWeight': 'bold'},
                 active_cell=None
             )
-        ], id='table-container', style={'width': '100%', 'display': 'inline-block', 'verticalAlign': 'top'}),
-
-        html.Div([
-            html.Button("Close Graph", id="close-graph", n_clicks=0,
-                        style={'marginBottom': '10px', 'backgroundColor': '#f0f0f0', 'border': '1px solid #ccc', 'padding': '5px 10px', 'cursor': 'pointer'}),
-            dcc.Dropdown(id='variance-selector',
-                         options=[{'label': f'{int(t*100) if (t*100)==int(t*100) else t*100}%',
-                                   'value': f'{int(t*100) if (t*100)==int(t*100) else t*100}%'}
-                                  for t in [0.025, 0.05, 0.1, 0.15, 0.2]],
-                         value='2.5%'),
-            dcc.Graph(id='stock-graph')
-        ], id='graph-container', style={'width': '0%', 'display': 'none', 'verticalAlign': 'top', 'paddingLeft': '20px'})
-    ], id='main-content', style={'display': 'flex'})
+        ], id='table-container', style={'width': '100%', 'display': 'inline-block', 'verticalAlign': 'top'})
+    ], id='main-content', style={'display': 'flex', 'padding': '10px'})
 ])
 
 @app.callback(
@@ -232,9 +244,9 @@ def update_table_and_view(filter_val, active_cell, n_clicks, current_data):
     table_style = {'width': '100%', 'display': 'inline-block'}
     graph_style = {'width': '0%', 'display': 'none'}
 
-    if triggered_id == 'stock-table' and active_cell and active_cell['column_id'] == 'SYMBOL':
+    if triggered_id == 'stock-table' and active_cell and (active_cell['column_id'] == 'SYMBOL' or 'Status' in active_cell['column_id']):
         table_style = {'width': '50%', 'display': 'inline-block'}
-        graph_style = {'width': '50%', 'display': 'inline-block', 'paddingLeft': '20px'}
+        graph_style = {'width': '50%', 'display': 'inline-block', 'paddingRight': '10px'}
     elif triggered_id == 'close-graph':
         table_style = {'width': '100%', 'display': 'inline-block'}
         graph_style = {'width': '0%', 'display': 'none'}
@@ -244,12 +256,21 @@ def update_table_and_view(filter_val, active_cell, n_clicks, current_data):
 @app.callback(
     Output('stock-graph', 'figure'),
     [Input('stock-table', 'active_cell'),
-     Input('variance-selector', 'value')],
+     Input('days-slider', 'value')],
     [State('stock-table', 'derived_virtual_data')]
 )
-def update_graph(active_cell, variance, virtual_data):
-    if not active_cell or active_cell['column_id'] != 'SYMBOL' or not virtual_data:
+def update_graph(active_cell, display_days, virtual_data):
+    if not active_cell or not virtual_data:
         return go.Figure()
+
+    col_id = active_cell['column_id']
+    if col_id != 'SYMBOL' and 'Status' not in col_id:
+        return go.Figure()
+
+    # Determine variance threshold from column clicked
+    variance = "2.5%" # Default
+    if 'Status' in col_id:
+        variance = col_id.replace(' Status', '')
 
     # Use row_id if available, otherwise index into virtual_data
     symbol = active_cell.get('row_id')
@@ -257,6 +278,9 @@ def update_graph(active_cell, variance, virtual_data):
         symbol = virtual_data[active_cell['row']]['SYMBOL']
 
     stock_df = raw_data[raw_data['SYMBOL'] == symbol].sort_values('TIMESTAMP')
+
+    # Filter by number of days
+    stock_df = stock_df.tail(display_days)
 
     # Get details for selected variance from the virtual data
     row_data = next(item for item in virtual_data if item["SYMBOL"] == symbol)
@@ -266,20 +290,23 @@ def update_graph(active_cell, variance, virtual_data):
     avg_qt = row_data.get(f"{variance}_avg_qt")
     n_days = row_data.get(f"{variance} Days", 0)
 
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.6, 0.2, 0.2])
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0, row_heights=[0.6, 0.2, 0.2])
 
     # OHLC
     fig.add_trace(go.Candlestick(x=stock_df['TIMESTAMP'], open=stock_df['EQ_OPEN_PRICE'], high=stock_df['EQ_HIGH_PRICE'],
                                  low=stock_df['EQ_LOW_PRICE'], close=stock_df['EQ_CLOSE_PRICE'], name='OHLC'), row=1, col=1)
     # Volume
-    fig.add_trace(go.Bar(x=stock_df['TIMESTAMP'], y=stock_df['EQ_TTL_TRD_QNTY'], name='Volume'), row=2, col=1)
+    fig.add_trace(go.Bar(x=stock_df['TIMESTAMP'], y=stock_df['EQ_TTL_TRD_QNTY'], name='Volume', marker_color='orange'), row=2, col=1)
     # QT
-    fig.add_trace(go.Bar(x=stock_df['TIMESTAMP'], y=stock_df['EQ_QT'], name='QT'), row=3, col=1)
+    fig.add_trace(go.Bar(x=stock_df['TIMESTAMP'], y=stock_df['EQ_QT'], name='QT', marker_color='teal'), row=3, col=1)
 
     if n_days > 7 and max_h is not None:
         # Consolidation lines on OHLC
-        cons_start_date = stock_df.iloc[-(n_days+1)]['TIMESTAMP']
-        cons_end_date = stock_df.iloc[-2]['TIMESTAMP']
+        all_symbol_data = raw_data[raw_data['SYMBOL'] == symbol].sort_values('TIMESTAMP')
+        cons_start_date = all_symbol_data.iloc[-(n_days+1)]['TIMESTAMP']
+        cons_end_date = all_symbol_data.iloc[-2]['TIMESTAMP']
+
+        # Only add shape if it's within visible range or partially visible
         fig.add_shape(type="rect", x0=cons_start_date, y0=min_l, x1=cons_end_date, y1=max_h,
                       line=dict(color="RoyalBlue", width=2), fillcolor="LightSkyBlue", opacity=0.3, row=1, col=1)
 
@@ -287,7 +314,20 @@ def update_graph(active_cell, variance, virtual_data):
         fig.add_hline(y=avg_vol, line_dash="dash", line_color="red", annotation_text="Avg Vol", row=2, col=1)
         fig.add_hline(y=avg_qt, line_dash="dash", line_color="red", annotation_text="Avg QT", row=3, col=1)
 
-    fig.update_layout(title=f"{symbol} Analysis ({variance})", xaxis_rangeslider_visible=False, height=800)
+    fig.update_layout(
+        title=f"{symbol} Analysis ({variance})",
+        xaxis_rangeslider_visible=False,
+        height=700,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        margin=dict(l=10, r=10, t=40, b=10)
+    )
+
+    # Black borders for subplots
+    for i in [1, 2, 3]:
+        fig.update_xaxes(showline=True, linewidth=1, linecolor='black', mirror=True, row=i, col=1)
+        fig.update_yaxes(showline=True, linewidth=1, linecolor='black', mirror=True, row=i, col=1)
+
     return fig
 
 if __name__ == '__main__':
